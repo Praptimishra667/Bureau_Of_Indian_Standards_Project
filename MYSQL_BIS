@@ -1,0 +1,73 @@
+-- ==========================================
+-- MySQL Script: Compliance Prediction Dataset
+-- Purpose: Clean raw data, engineer features,
+--          create supplier-level aggregates,
+--          and prepare dataset for ML.
+-- ==========================================
+
+-- Step 1: Clean and standardize data
+WITH base_data AS (
+    SELECT
+        UPPER(TRIM(Compliance_Status)) AS Compliance_Status,
+        DATE(Purchase_Date) AS Purchase_Date,
+        TRIM(Plant) AS Plant,
+        TRIM(Supplier) AS Supplier,
+        TRIM(Component) AS Component,
+        TRIM(Component_Type) AS Component_Type,
+        TRIM(COALESCE(IS_Standard_Applicable, '')) AS IS_Standard_Applicable,
+        COALESCE(Standard_Number, '') AS Standard_Number
+    FROM Components
+),
+
+-- Step 2: Add binary target variable
+with_target AS (
+    SELECT *,
+           CASE 
+               WHEN Compliance_Status = 'COMPLIANT' THEN 1 
+               ELSE 0 
+           END AS target
+    FROM base_data
+),
+
+-- Step 3: Engineer numeric & categorical features
+with_features AS (
+    SELECT *,
+           EXTRACT(YEAR FROM Purchase_Date) AS purchase_year,
+           EXTRACT(MONTH FROM Purchase_Date) AS purchase_month,
+           DATEDIFF(CURDATE(), Purchase_Date) AS component_age_days,
+           CASE WHEN LOWER(IS_Standard_Applicable) = 'yes' THEN 1 ELSE 0 END AS std_applicable_flag,
+           CASE WHEN CHAR_LENGTH(Standard_Number) > 0 THEN 1 ELSE 0 END AS has_standard_number,
+           CHAR_LENGTH(Standard_Number) AS std_num_len
+    FROM with_target
+),
+
+-- Step 4: Supplier-level aggregates
+supplier_stats AS (
+    SELECT Supplier,
+           COUNT(*) AS supplier_count,
+           AVG(CASE WHEN Compliance_Status = 'COMPLIANT' THEN 1 ELSE 0 END) AS supplier_compliance_rate
+    FROM with_features
+    GROUP BY Supplier
+)
+
+-- Step 5: Final dataset combining everything
+SELECT 
+    f.Plant,
+    f.Supplier,
+    f.Component,
+    f.Component_Type,
+    f.Compliance_Status,
+    f.Purchase_Date,
+    f.purchase_year,
+    f.purchase_month,
+    f.component_age_days,
+    f.std_applicable_flag,
+    f.has_standard_number,
+    f.std_num_len,
+    f.target,
+    s.supplier_count,
+    s.supplier_compliance_rate
+FROM with_features f
+LEFT JOIN supplier_stats s
+  ON f.Supplier = s.Supplier
+ORDER BY f.Plant, f.Supplier, f.Purchase_Date;
